@@ -1,9 +1,11 @@
 use crate::generator::Token;
+use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+#[cfg(any(unix, target_os = "redox"))]
 use xdg::BaseDirectories;
 
 const TOKENS_FILE: &str = "tokens.json";
@@ -19,9 +21,29 @@ pub fn load_tokens() -> Result<Vec<Token>, io::Error> {
 }
 
 fn tokens_path() -> Result<PathBuf, io::Error> {
-    BaseDirectories::with_prefix("kloak")
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
-        .place_config_file(TOKENS_FILE)
+    #[cfg(any(unix, target_os = "redox"))]
+    {
+        BaseDirectories::with_prefix("kloak")
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+            .place_config_file(TOKENS_FILE)
+    }
+
+    #[cfg(windows)]
+    {
+        let app_data = env::var_os("APPDATA")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "APPDATA is not set"))?;
+        Ok(PathBuf::from(app_data).join("kloak").join(TOKENS_FILE))
+    }
+
+    #[cfg(not(any(unix, target_os = "redox", windows)))]
+    {
+        let home = env::var_os("HOME")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+        Ok(PathBuf::from(home)
+            .join(".config")
+            .join("kloak")
+            .join(TOKENS_FILE))
+    }
 }
 
 pub fn save_tokens_to_path(tokens: &[Token], path: &Path) -> Result<(), io::Error> {
