@@ -24,6 +24,12 @@ enum Commands {
 
     /// Display all saved OTPs
     List,
+
+    // Get a specific OTP
+    Get {
+        /// Name of the OTP entry to get
+        name: String,
+    },
 }
 
 fn main() {
@@ -40,6 +46,7 @@ fn run() -> Result<(), String> {
         Some(Commands::Add) => add_token(),
         Some(Commands::Remove) => remove_token(),
         Some(Commands::List) | None => list_tokens(),
+        Some(Commands::Get { name }) => get_token(&name),
     }
 }
 
@@ -123,6 +130,23 @@ fn remove_token() -> Result<(), String> {
 
     println!("Removed {}.", removed.issuer);
     Ok(())
+}
+
+fn get_token(name: &str) -> Result<(), String> {
+    let tokens = fs::load_tokens().map_err(|e| e.to_string())?;
+
+    let now = current_timestamp()?;
+    let remaining = seconds_remaining(now);
+    let remaining_label = color_remaining(remaining);
+
+    for token in tokens {
+        if token.issuer.contains(name) {
+            let otp = generator::generate_token_at(&token.secret, now)?;
+            println!("{} - {} - {}", token.issuer, otp.bold(), remaining_label);
+            return Ok(());
+        }
+    }
+    Err(format!("No token found matching name: {name}"))
 }
 
 fn read_prompt(prompt: &str) -> io::Result<String> {
