@@ -5,12 +5,15 @@ use totp_rs::{Algorithm, TOTP};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Token {
     pub issuer: String,
-    pub secret: String,
 }
 
 impl Token {
-    pub fn new(issuer: String, secret: String) -> Self {
-        Self { issuer, secret }
+    pub fn new(issuer: String) -> Self {
+        Self { issuer }
+    }
+
+    pub fn keyring_id(&self) -> &str {
+        &self.issuer
     }
 }
 

@@ -1,5 +1,6 @@
 mod fs;
 mod generator;
+mod secrets;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -51,7 +52,7 @@ fn run() -> Result<(), String> {
 }
 
 fn list_tokens() -> Result<(), String> {
-    let tokens = fs::load_tokens().map_err(|e| e.to_string())?;
+    let tokens = load_tokens()?;
 
     if tokens.is_empty() {
         println!("No OTPs saved. Run `kloak add` to add one.");
@@ -63,7 +64,15 @@ fn list_tokens() -> Result<(), String> {
     let remaining_label = color_remaining(remaining);
 
     for token in tokens {
-        match generator::generate_token_at(&token.secret, now) {
+        let secret = match secrets::load_secret(&token) {
+            Ok(secret) => secret,
+            Err(error) => {
+                println!("{} - {}", token.issuer, error.red());
+                continue;
+            }
+        };
+
+        match generator::generate_token_at(&secret, now) {
             Ok(code) => println!("{} - {} - {}", token.issuer, code.bold(), remaining_label),
             Err(_) => println!("{} - {}", token.issuer, "invalid secret".red()),
         }
@@ -73,7 +82,7 @@ fn list_tokens() -> Result<(), String> {
 }
 
 fn add_token() -> Result<(), String> {
-    let mut tokens = fs::load_tokens().map_err(|e| e.to_string())?;
+    let mut tokens = load_tokens()?;
     let issuer = read_prompt("Issuer: ").map_err(|e| e.to_string())?;
     let secret = read_prompt("Secret: ").map_err(|e| e.to_string())?;
     let issuer = issuer.trim().to_string();
@@ -95,15 +104,20 @@ fn add_token() -> Result<(), String> {
     }
 
     generator::totp_from_secret(&secret).map_err(|_| "secret is not valid Base32".to_string())?;
-    tokens.push(generator::Token::new(issuer.clone(), secret));
-    fs::save_tokens(&tokens).map_err(|e| e.to_string())?;
+    let token = generator::Token::new(issuer.clone());
+    secrets::save_secret(&token, &secret)?;
+    tokens.push(token.clone());
+    if let Err(error) = fs::save_tokens(&tokens) {
+        let _ = secrets::delete_secret(&token);
+        return Err(error.to_string());
+    }
 
     println!("Added {issuer}.");
     Ok(())
 }
 
 fn remove_token() -> Result<(), String> {
-    let mut tokens = fs::load_tokens().map_err(|e| e.to_string())?;
+    let mut tokens = load_tokens()?;
 
     if tokens.is_empty() {
         println!("No OTPs saved.");
@@ -127,13 +141,14 @@ fn remove_token() -> Result<(), String> {
     let removed = remove_token_at(&mut tokens, index - 1)
         .ok_or_else(|| "selection out of range".to_string())?;
     fs::save_tokens(&tokens).map_err(|e| e.to_string())?;
+    secrets::delete_secret(&removed)?;
 
     println!("Removed {}.", removed.issuer);
     Ok(())
 }
 
 fn get_token(name: &str) -> Result<(), String> {
-    let tokens = fs::load_tokens().map_err(|e| e.to_string())?;
+    let tokens = load_tokens()?;
 
     let now = current_timestamp()?;
     let remaining = seconds_remaining(now);
@@ -141,12 +156,35 @@ fn get_token(name: &str) -> Result<(), String> {
 
     for token in tokens {
         if token.issuer.contains(name) {
-            let otp = generator::generate_token_at(&token.secret, now)?;
+            let secret = secrets::load_secret(&token)?;
+            let otp = generator::generate_token_at(&secret, now)?;
             println!("{} - {} - {}", token.issuer, otp.bold(), remaining_label);
             return Ok(());
         }
     }
     Err(format!("No token found matching name: {name}"))
+}
+
+fn load_tokens() -> Result<Vec<generator::Token>, String> {
+    let records = fs::load_token_records().map_err(|e| e.to_string())?;
+    let mut migrated = false;
+    let mut tokens = Vec::with_capacity(records.len());
+
+    for record in records {
+        if let Some(secret) = record.secret {
+            let secret = generator::normalize_secret(&secret);
+            secrets::save_secret(&record.token, &secret)?;
+            migrated = true;
+        }
+
+        tokens.push(record.token);
+    }
+
+    if migrated {
+        fs::save_tokens(&tokens).map_err(|e| e.to_string())?;
+    }
+
+    Ok(tokens)
 }
 
 fn read_prompt(prompt: &str) -> io::Result<String> {
@@ -204,8 +242,8 @@ mod tests {
     #[test]
     fn removes_selected_token_only() {
         let mut tokens = vec![
-            generator::Token::new("First".to_string(), "JBSWY3DPEHPK3PXP".to_string()),
-            generator::Token::new("Second".to_string(), "JBSWY3DPEHPK3PXP".to_string()),
+            generator::Token::new("First".to_string()),
+            generator::Token::new("Second".to_string()),
         ];
 
         let removed = remove_token_at(&mut tokens, 0).unwrap();
@@ -217,10 +255,7 @@ mod tests {
 
     #[test]
     fn remove_out_of_range_returns_none() {
-        let mut tokens = vec![generator::Token::new(
-            "Only".to_string(),
-            "JBSWY3DPEHPK3PXP".to_string(),
-        )];
+        let mut tokens = vec![generator::Token::new("Only".to_string())];
 
         assert!(remove_token_at(&mut tokens, 1).is_none());
         assert_eq!(tokens.len(), 1);
