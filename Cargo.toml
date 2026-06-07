@@ -2,6 +2,8 @@
 name = "kloak"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A CLI tool to generate 6 digit OTPs"
 
 [dependencies]
 data-encoding = "2.3"
